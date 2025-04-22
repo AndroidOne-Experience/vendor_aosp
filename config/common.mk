@@ -254,6 +254,9 @@ CUSTOM_LOCALES += \
 
 include vendor/aosp/config/version.mk
 
+# Signing
+-include vendor/priv-keys/keys.mk
+
 -include $(WORKSPACE)/build_env/image-auto-bits.mk
 
 # Fonts
