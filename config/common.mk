@@ -59,6 +59,9 @@ PRODUCT_PRODUCT_PROPERTIES += \
 endif
 endif
 
+# Bootanimation
+$(call inherit-product, vendor/aosp/bootanimation/bootanimation.mk)
+
 # Lineage-specific broadcast actions whitelist
 PRODUCT_COPY_FILES += \
     vendor/aosp/config/permissions/lineage-sysconfig.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/lineage-sysconfig.xml
