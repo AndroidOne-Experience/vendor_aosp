@@ -3,4 +3,4 @@
 # Override host metadata to make builds more reproducible and avoid leaking info
 export BUILD_USERNAME=AOSP
 export BUILD_HOSTNAME=android-build
-
+export SKIP_ABI_CHECKS=true
