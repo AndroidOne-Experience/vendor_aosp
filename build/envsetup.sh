@@ -12,12 +12,12 @@ function check_product()
         echo "Couldn't locate the top of the tree. Try setting TOP." >&2
         return
     fi
-    if (echo -n $1 | grep -q -e "^lineage_") ; then
-        LINEAGE_BUILD=$(echo -n $1 | sed -e 's/^lineage_//g')
+    if (echo -n $1 | grep -q -e "^aosp_") ; then
+        AOSP_BUILD=$(echo -n $1 | sed -e 's/^aosp_//g')
     else
-        LINEAGE_BUILD=
+        AOSP_BUILD=
     fi
-    export LINEAGE_BUILD
+    export AOSP_BUILD
 
         TARGET_PRODUCT=$1 \
         TARGET_RELEASE=$2 \
@@ -32,7 +32,7 @@ function brunch()
 {
     breakfast $*
     if [ $? -eq 0 ]; then
-        mka bacon
+        mka otaimage
     else
         echo "No such item in brunch menu. Try 'breakfast'"
         return 1
@@ -44,7 +44,7 @@ function breakfast()
 {
     target=$1
     local variant=$2
-    source ${ANDROID_BUILD_TOP}/vendor/lineage/vars/aosp_target_release
+    source ${ANDROID_BUILD_TOP}/vendor/aosp/vars/aosp_target_release
 
     if [ $# -eq 0 ]; then
         # No arguments, so let's have the full menu
@@ -59,45 +59,13 @@ function breakfast()
                 variant="userdebug"
             fi
 
-            lunch lineage_$target-$aosp_target_release-$variant
+            lunch aosp_$target-$aosp_target_release-$variant
         fi
     fi
     return $?
 }
 
 alias bib=breakfast
-
-function eat()
-{
-    if [ "$OUT" ] ; then
-        ZIPPATH=`ls -tr "$OUT"/lineage-*.zip | tail -1`
-        if [ ! -f $ZIPPATH ] ; then
-            echo "Nothing to eat"
-            return 1
-        fi
-        echo "Waiting for device..."
-        adb wait-for-device-recovery
-        echo "Found device"
-        if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD"); then
-            echo "Rebooting to sideload for install"
-            adb reboot sideload-auto-reboot
-            adb wait-for-sideload
-            adb sideload $ZIPPATH
-        else
-            echo "The connected device does not appear to be $LINEAGE_BUILD, run away!"
-        fi
-        return $?
-    else
-        echo "Nothing to eat"
-        return 1
-    fi
-}
-
-function omnom()
-{
-    brunch $*
-    eat
-}
 
 function cout()
 {
@@ -108,597 +76,6 @@ function cout()
     fi
 }
 
-function dddclient()
-{
-   local OUT_ROOT=$(get_abs_build_var PRODUCT_OUT)
-   local OUT_SYMBOLS=$(get_abs_build_var TARGET_OUT_UNSTRIPPED)
-   local OUT_SO_SYMBOLS=$(get_abs_build_var TARGET_OUT_SHARED_LIBRARIES_UNSTRIPPED)
-   local OUT_VENDOR_SO_SYMBOLS=$(get_abs_build_var TARGET_OUT_VENDOR_SHARED_LIBRARIES_UNSTRIPPED)
-   local OUT_EXE_SYMBOLS=$(get_symbols_directory)
-   local PREBUILTS=$(get_abs_build_var ANDROID_PREBUILTS)
-   local ARCH=$(_get_build_var_cached TARGET_ARCH)
-   local GDB
-   case "$ARCH" in
-       arm) GDB=arm-linux-androideabi-gdb;;
-       arm64) GDB=arm-linux-androideabi-gdb; GDB64=aarch64-linux-android-gdb;;
-       mips|mips64) GDB=mips64el-linux-android-gdb;;
-       x86) GDB=x86_64-linux-android-gdb;;
-       x86_64) GDB=x86_64-linux-android-gdb;;
-       *) echo "Unknown arch $ARCH"; return 1;;
-   esac
-
-   if [ "$OUT_ROOT" -a "$PREBUILTS" ]; then
-       local EXE="$1"
-       if [ "$EXE" ] ; then
-           EXE=$1
-           if [[ $EXE =~ ^[^/].* ]] ; then
-               EXE="system/bin/"$EXE
-           fi
-       else
-           EXE="app_process"
-       fi
-
-       local PORT="$2"
-       if [ "$PORT" ] ; then
-           PORT=$2
-       else
-           PORT=":5039"
-       fi
-
-       local PID="$3"
-       if [ "$PID" ] ; then
-           if [[ ! "$PID" =~ ^[0-9]+$ ]] ; then
-               PID=`pid $3`
-               if [[ ! "$PID" =~ ^[0-9]+$ ]] ; then
-                   # that likely didn't work because of returning multiple processes
-                   # try again, filtering by root processes (don't contain colon)
-                   PID=`adb shell ps | \grep $3 | \grep -v ":" | awk '{print $2}'`
-                   if [[ ! "$PID" =~ ^[0-9]+$ ]]
-                   then
-                       echo "Couldn't resolve '$3' to single PID"
-                       return 1
-                   else
-                       echo ""
-                       echo "WARNING: multiple processes matching '$3' observed, using root process"
-                       echo ""
-                   fi
-               fi
-           fi
-           adb forward "tcp$PORT" "tcp$PORT"
-           local USE64BIT="$(is64bit $PID)"
-           adb shell gdbserver$USE64BIT $PORT --attach $PID &
-           sleep 2
-       else
-               echo ""
-               echo "If you haven't done so already, do this first on the device:"
-               echo "    gdbserver $PORT /system/bin/$EXE"
-                   echo " or"
-               echo "    gdbserver $PORT --attach <PID>"
-               echo ""
-       fi
-
-       OUT_SO_SYMBOLS=$OUT_SO_SYMBOLS$USE64BIT
-       OUT_VENDOR_SO_SYMBOLS=$OUT_VENDOR_SO_SYMBOLS$USE64BIT
-
-       echo >|"$OUT_ROOT/gdbclient.cmds" "set solib-absolute-prefix $OUT_SYMBOLS"
-       echo >>"$OUT_ROOT/gdbclient.cmds" "set solib-search-path $OUT_SO_SYMBOLS:$OUT_SO_SYMBOLS/hw:$OUT_SO_SYMBOLS/ssl/engines:$OUT_SO_SYMBOLS/drm:$OUT_SO_SYMBOLS/egl:$OUT_SO_SYMBOLS/soundfx:$OUT_VENDOR_SO_SYMBOLS:$OUT_VENDOR_SO_SYMBOLS/hw:$OUT_VENDOR_SO_SYMBOLS/egl"
-       echo >>"$OUT_ROOT/gdbclient.cmds" "source $ANDROID_BUILD_TOP/development/scripts/gdb/dalvik.gdb"
-       echo >>"$OUT_ROOT/gdbclient.cmds" "target remote $PORT"
-       # Enable special debugging for ART processes.
-       if [[ $EXE =~ (^|/)(app_process|dalvikvm)(|32|64)$ ]]; then
-          echo >> "$OUT_ROOT/gdbclient.cmds" "art-on"
-       fi
-       echo >>"$OUT_ROOT/gdbclient.cmds" ""
-
-       local WHICH_GDB=
-       # 64-bit exe found
-       if [ "$USE64BIT" != "" ] ; then
-           WHICH_GDB=$ANDROID_TOOLCHAIN/$GDB64
-       # 32-bit exe / 32-bit platform
-       elif [ "$(_get_build_var_cached TARGET_2ND_ARCH)" = "" ]; then
-           WHICH_GDB=$ANDROID_TOOLCHAIN/$GDB
-       # 32-bit exe / 64-bit platform
-       else
-           WHICH_GDB=$ANDROID_TOOLCHAIN_2ND_ARCH/$GDB
-       fi
-
-       ddd --debugger $WHICH_GDB -x "$OUT_ROOT/gdbclient.cmds" "$OUT_EXE_SYMBOLS/$EXE"
-  else
-       echo "Unable to determine build system output dir."
-   fi
-}
-
-function lineageremote()
-{
-    if ! git rev-parse --git-dir &> /dev/null
-    then
-        echo ".git directory not found. Please run this from the root directory of the Android repository you wish to set up."
-        return 1
-    fi
-    git remote rm lineage 2> /dev/null
-    local REMOTE=$(git config --get remote.github.projectname)
-    local LINEAGE="true"
-    if [ -z "$REMOTE" ]
-    then
-        REMOTE=$(git config --get remote.aosp.projectname)
-        LINEAGE="false"
-    fi
-    if [ -z "$REMOTE" ]
-    then
-        REMOTE=$(git config --get remote.clo.projectname)
-        LINEAGE="false"
-    fi
-
-    if [ $LINEAGE = "false" ]
-    then
-        local PROJECT=$(echo $REMOTE | sed -e "s#platform/#android/#g; s#/#_#g")
-        local PFX="LineageOS/"
-    else
-        local PROJECT=$REMOTE
-    fi
-
-    local LINEAGE_USER=$(git config --get review.review.lineageos.org.username)
-    if [ -z "$LINEAGE_USER" ]
-    then
-        git remote add lineage ssh://review.lineageos.org:29418/$PFX$PROJECT
-    else
-        git remote add lineage ssh://$LINEAGE_USER@review.lineageos.org:29418/$PFX$PROJECT
-    fi
-    echo "Remote 'lineage' created"
-}
-
-function aospremote()
-{
-    local T=`git rev-parse --show-toplevel 2> /dev/null`
-    if [ -z "$T" ]
-    then
-        echo "Git repository not found. Please run this from the directory of the Android repository you wish to set up."
-        return 1
-    fi
-    git remote rm aosp 2> /dev/null
-
-    if [ -f "$T/.gitupstream" ]; then
-        local REMOTE=$(cat "$T/.gitupstream" | cut -d ' ' -f 1)
-        git remote add aosp ${REMOTE}
-    else
-        local PROJECT=$(pwd -P | sed -e "s#$ANDROID_BUILD_TOP\/##; s#-caf.*##; s#\/default##")
-        # Google moved the repo location in Oreo
-        if [ $PROJECT = "build/make" ]
-        then
-            PROJECT="build"
-        fi
-        if (echo $PROJECT | grep -qv "^device")
-        then
-            local PFX="platform/"
-        fi
-        git remote add aosp https://android.googlesource.com/$PFX$PROJECT
-    fi
-    echo "Remote 'aosp' created"
-}
-
-function cloremote()
-{
-    local T=`git rev-parse --show-toplevel 2> /dev/null`
-    if [ -z "$T" ]
-    then
-        echo "Git repository not found. Please run this from the directory of the Android repository you wish to set up."
-        return 1
-    fi
-    git remote rm clo 2> /dev/null
-
-    if [ -f "$T/.gitupstream" ]; then
-        local REMOTE=$(cat "$T/.gitupstream" | cut -d ' ' -f 1)
-        git remote add clo ${REMOTE}
-    else
-        local PROJECT=$(pwd -P | sed -e "s#$ANDROID_BUILD_TOP\/##; s#-caf.*##; s#\/default##")
-        # Google moved the repo location in Oreo
-        if [ $PROJECT = "build/make" ]
-        then
-            PROJECT="build_repo"
-        fi
-        if [[ $PROJECT =~ "qcom/opensource" ]];
-        then
-            PROJECT=$(echo $PROJECT | sed -e "s#qcom\/opensource#qcom-opensource#")
-        fi
-        if (echo $PROJECT | grep -qv "^device")
-        then
-            local PFX="platform/"
-        fi
-        git remote add clo https://git.codelinaro.org/clo/la/$PFX$PROJECT
-    fi
-    echo "Remote 'clo' created"
-}
-
-function githubremote()
-{
-    if ! git rev-parse --git-dir &> /dev/null
-    then
-        echo ".git directory not found. Please run this from the root directory of the Android repository you wish to set up."
-        return 1
-    fi
-    git remote rm github 2> /dev/null
-    local REMOTE=$(git config --get remote.aosp.projectname)
-
-    if [ -z "$REMOTE" ]
-    then
-        REMOTE=$(git config --get remote.clo.projectname)
-    fi
-
-    local PROJECT=$(echo $REMOTE | sed -e "s#platform/#android/#g; s#/#_#g")
-
-    git remote add github https://github.com/LineageOS/$PROJECT
-    echo "Remote 'github' created"
-}
-
-function privateremote()
-{
-    if ! git rev-parse --git-dir &> /dev/null
-    then
-        echo ".git directory not found. Please run this from the root directory of the Android repository you wish to set up."
-        return 1
-    fi
-    git remote rm private 2> /dev/null
-    local PROJECT=$(git config --get remote.github.projectname)
-
-    git remote add private git@github.com:$PROJECT.git
-    echo "Remote 'private' created"
-}
-
-function installboot()
-{
-    if [ ! -e "$OUT/recovery/root/system/etc/recovery.fstab" ];
-    then
-        echo "No recovery.fstab found. Build recovery first."
-        return 1
-    fi
-    if [ ! -e "$OUT/boot.img" ];
-    then
-        echo "No boot.img found. Run make bootimage first."
-        return 1
-    fi
-    PARTITION=`grep "^\/boot" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $3'}`
-    if [ -z "$PARTITION" ];
-    then
-        # Try for RECOVERY_FSTAB_VERSION = 2
-        PARTITION=`grep "[[:space:]]\/boot[[:space:]]" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $1'}`
-        PARTITION_TYPE=`grep "[[:space:]]\/boot[[:space:]]" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $3'}`
-        if [ -z "$PARTITION" ];
-        then
-            echo "Unable to determine boot partition."
-            return 1
-        fi
-    fi
-    adb wait-for-device-recovery
-    adb root
-    adb wait-for-device-recovery
-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD");
-    then
-        adb push $OUT/boot.img /cache/
-        adb shell dd if=/cache/boot.img of=$PARTITION
-        adb shell rm -rf /cache/boot.img
-        echo "Installation complete."
-    else
-        echo "The connected device does not appear to be $LINEAGE_BUILD, run away!"
-    fi
-}
-
-function installrecovery()
-{
-    if [ ! -e "$OUT/recovery/root/system/etc/recovery.fstab" ];
-    then
-        echo "No recovery.fstab found. Build recovery first."
-        return 1
-    fi
-    if [ ! -e "$OUT/recovery.img" ];
-    then
-        echo "No recovery.img found. Run make recoveryimage first."
-        return 1
-    fi
-    PARTITION=`grep "^\/recovery" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $3'}`
-    if [ -z "$PARTITION" ];
-    then
-        # Try for RECOVERY_FSTAB_VERSION = 2
-        PARTITION=`grep "[[:space:]]\/recovery[[:space:]]" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $1'}`
-        PARTITION_TYPE=`grep "[[:space:]]\/recovery[[:space:]]" $OUT/recovery/root/system/etc/recovery.fstab | awk {'print $3'}`
-        if [ -z "$PARTITION" ];
-        then
-            echo "Unable to determine recovery partition."
-            return 1
-        fi
-    fi
-    adb wait-for-device-recovery
-    adb root
-    adb wait-for-device-recovery
-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD");
-    then
-        adb push $OUT/recovery.img /cache/
-        adb shell dd if=/cache/recovery.img of=$PARTITION
-        adb shell rm -rf /cache/recovery.img
-        echo "Installation complete."
-    else
-        echo "The connected device does not appear to be $LINEAGE_BUILD, run away!"
-    fi
-}
-
-function lineagegerrit() {
-    if [ "$(basename $SHELL)" = "zsh" ]; then
-        # zsh does not define FUNCNAME, derive from funcstack
-        local FUNCNAME=$funcstack[1]
-    fi
-
-    if [ $# -eq 0 ]; then
-        $FUNCNAME help
-        return 1
-    fi
-    local user=`git config --get review.review.lineageos.org.username`
-    local review=`git config --get remote.github.review`
-    local project=`git config --get remote.github.projectname`
-    local command=$1
-    shift
-    case $command in
-        help)
-            if [ $# -eq 0 ]; then
-                cat <<EOF
-Usage:
-    $FUNCNAME COMMAND [OPTIONS] [CHANGE-ID[/PATCH-SET]][{@|^|~|:}ARG] [-- ARGS]
-
-Commands:
-    fetch   Just fetch the change as FETCH_HEAD
-    help    Show this help, or for a specific command
-    pull    Pull a change into current branch
-    push    Push HEAD or a local branch to Gerrit for a specific branch
-
-Any other Git commands that support refname would work as:
-    git fetch URL CHANGE && git COMMAND OPTIONS FETCH_HEAD{@|^|~|:}ARG -- ARGS
-
-See '$FUNCNAME help COMMAND' for more information on a specific command.
-
-Example:
-    $FUNCNAME checkout -b topic 1234/5
-works as:
-    git fetch http://DOMAIN/p/PROJECT refs/changes/34/1234/5 \\
-      && git checkout -b topic FETCH_HEAD
-will checkout a new branch 'topic' base on patch-set 5 of change 1234.
-Patch-set 1 will be fetched if omitted.
-EOF
-                return
-            fi
-            case $1 in
-                __cmg_*) echo "For internal use only." ;;
-                changes|for)
-                    if [ "$FUNCNAME" = "lineagegerrit" ]; then
-                        echo "'$FUNCNAME $1' is deprecated."
-                    fi
-                    ;;
-                help) $FUNCNAME help ;;
-                fetch|pull) cat <<EOF
-usage: $FUNCNAME $1 [OPTIONS] CHANGE-ID[/PATCH-SET]
-
-works as:
-    git $1 OPTIONS http://DOMAIN/p/PROJECT \\
-      refs/changes/HASH/CHANGE-ID/{PATCH-SET|1}
-
-Example:
-    $FUNCNAME $1 1234
-will $1 patch-set 1 of change 1234
-EOF
-                    ;;
-                push) cat <<EOF
-usage: $FUNCNAME push [OPTIONS] [LOCAL_BRANCH:]REMOTE_BRANCH
-
-works as:
-    git push OPTIONS ssh://USER@DOMAIN:29418/PROJECT \\
-      {LOCAL_BRANCH|HEAD}:refs/for/REMOTE_BRANCH
-
-Example:
-    $FUNCNAME push fix6789:gingerbread
-will push local branch 'fix6789' to Gerrit for branch 'gingerbread'.
-HEAD will be pushed from local if omitted.
-EOF
-                    ;;
-                *)
-                    $FUNCNAME __cmg_err_not_supported $1 && return
-                    cat <<EOF
-usage: $FUNCNAME $1 [OPTIONS] CHANGE-ID[/PATCH-SET][{@|^|~|:}ARG] [-- ARGS]
-
-works as:
-    git fetch http://DOMAIN/p/PROJECT \\
-      refs/changes/HASH/CHANGE-ID/{PATCH-SET|1} \\
-      && git $1 OPTIONS FETCH_HEAD{@|^|~|:}ARG -- ARGS
-EOF
-                    ;;
-            esac
-            ;;
-        __cmg_get_ref)
-            $FUNCNAME __cmg_err_no_arg $command $# && return 1
-            local change_id patchset_id hash
-            case $1 in
-                */*)
-                    change_id=${1%%/*}
-                    patchset_id=${1#*/}
-                    ;;
-                *)
-                    change_id=$1
-                    patchset_id=1
-                    ;;
-            esac
-            hash=$(($change_id % 100))
-            case $hash in
-                [0-9]) hash="0$hash" ;;
-            esac
-            echo "refs/changes/$hash/$change_id/$patchset_id"
-            ;;
-        fetch|pull)
-            $FUNCNAME __cmg_err_no_arg $command $# help && return 1
-            $FUNCNAME __cmg_err_not_repo && return 1
-            local change=$1
-            shift
-            git $command $@ http://$review/p/$project \
-                $($FUNCNAME __cmg_get_ref $change) || return 1
-            ;;
-        push)
-            $FUNCNAME __cmg_err_no_arg $command $# help && return 1
-            $FUNCNAME __cmg_err_not_repo && return 1
-            if [ -z "$user" ]; then
-                echo >&2 "Gerrit username not found."
-                return 1
-            fi
-            local local_branch remote_branch
-            case $1 in
-                *:*)
-                    local_branch=${1%:*}
-                    remote_branch=${1##*:}
-                    ;;
-                *)
-                    local_branch=HEAD
-                    remote_branch=$1
-                    ;;
-            esac
-            shift
-            git push $@ ssh://$user@$review:29418/$project \
-                ${local_branch}:refs/for/$remote_branch || return 1
-            ;;
-        changes|for)
-            if [ "$FUNCNAME" = "lineagegerrit" ]; then
-                echo >&2 "'$FUNCNAME $command' is deprecated."
-            fi
-            ;;
-        __cmg_err_no_arg)
-            if [ $# -lt 2 ]; then
-                echo >&2 "'$FUNCNAME $command' missing argument."
-            elif [ $2 -eq 0 ]; then
-                if [ -n "$3" ]; then
-                    $FUNCNAME help $1
-                else
-                    echo >&2 "'$FUNCNAME $1' missing argument."
-                fi
-            else
-                return 1
-            fi
-            ;;
-        __cmg_err_not_repo)
-            if [ -z "$review" -o -z "$project" ]; then
-                echo >&2 "Not currently in any reviewable repository."
-            else
-                return 1
-            fi
-            ;;
-        __cmg_err_not_supported)
-            $FUNCNAME __cmg_err_no_arg $command $# && return
-            case $1 in
-                #TODO: filter more git commands that don't use refname
-                init|add|rm|mv|status|clone|remote|bisect|config|stash)
-                    echo >&2 "'$FUNCNAME $1' is not supported."
-                    ;;
-                *) return 1 ;;
-            esac
-            ;;
-    #TODO: other special cases?
-        *)
-            $FUNCNAME __cmg_err_not_supported $command && return 1
-            $FUNCNAME __cmg_err_no_arg $command $# help && return 1
-            $FUNCNAME __cmg_err_not_repo && return 1
-            local args="$@"
-            local change pre_args refs_arg post_args
-            case "$args" in
-                *--\ *)
-                    pre_args=${args%%-- *}
-                    post_args="-- ${args#*-- }"
-                    ;;
-                *) pre_args="$args" ;;
-            esac
-            args=($pre_args)
-            pre_args=
-            if [ ${#args[@]} -gt 0 ]; then
-                change=${args[${#args[@]}-1]}
-            fi
-            if [ ${#args[@]} -gt 1 ]; then
-                pre_args=${args[0]}
-                for ((i=1; i<${#args[@]}-1; i++)); do
-                    pre_args="$pre_args ${args[$i]}"
-                done
-            fi
-            while ((1)); do
-                case $change in
-                    ""|--)
-                        $FUNCNAME help $command
-                        return 1
-                        ;;
-                    *@*)
-                        if [ -z "$refs_arg" ]; then
-                            refs_arg="@${change#*@}"
-                            change=${change%%@*}
-                        fi
-                        ;;
-                    *~*)
-                        if [ -z "$refs_arg" ]; then
-                            refs_arg="~${change#*~}"
-                            change=${change%%~*}
-                        fi
-                        ;;
-                    *^*)
-                        if [ -z "$refs_arg" ]; then
-                            refs_arg="^${change#*^}"
-                            change=${change%%^*}
-                        fi
-                        ;;
-                    *:*)
-                        if [ -z "$refs_arg" ]; then
-                            refs_arg=":${change#*:}"
-                            change=${change%%:*}
-                        fi
-                        ;;
-                    *) break ;;
-                esac
-            done
-            $FUNCNAME fetch $change \
-                && git $command $pre_args FETCH_HEAD$refs_arg $post_args \
-                || return 1
-            ;;
-    esac
-}
-
-function lineagerebase() {
-    local repo=$1
-    local refs=$2
-    local pwd="$(pwd)"
-    local dir="$(gettop)/$repo"
-
-    if [ -z $repo ] || [ -z $refs ]; then
-        echo "LineageOS Gerrit Rebase Usage: "
-        echo "      lineagerebase <path to project> <patch IDs on Gerrit>"
-        echo "      The patch IDs appear on the Gerrit commands that are offered."
-        echo "      They consist on a series of numbers and slashes, after the text"
-        echo "      refs/changes. For example, the ID in the following command is 26/8126/2"
-        echo ""
-        echo "      git[...]ges_apps_Camera refs/changes/26/8126/2 && git cherry-pick FETCH_HEAD"
-        echo ""
-        return
-    fi
-
-    if [ ! -d $dir ]; then
-        echo "Directory $dir doesn't exist in tree."
-        return
-    fi
-    cd $dir
-    repo=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
-    echo "Starting branch..."
-    repo start tmprebase .
-    echo "Bringing it up to date..."
-    repo sync .
-    echo "Fetching change..."
-    git fetch "http://review.lineageos.org/p/$repo" "refs/changes/$refs" && git cherry-pick FETCH_HEAD
-    if [ "$?" != "0" ]; then
-        echo "Error cherry-picking. Not uploading!"
-        return
-    fi
-    echo "Uploading..."
-    repo upload .
-    echo "Cleaning up..."
-    repo abandon tmprebase .
-    cd $pwd
-}
-
 function mka() {
     m "$@"
 }
@@ -707,7 +84,7 @@ function cmka() {
     if [ ! -z "$1" ]; then
         for i in "$@"; do
             case $i in
-                bacon|otapackage|systemimage)
+                otaimage|otapackage|systemimage)
                     mka installclean
                     mka $i
                     ;;
@@ -721,26 +98,6 @@ function cmka() {
         mka clean
         mka
     fi
-}
-
-function repolastsync() {
-    RLSPATH="$ANDROID_BUILD_TOP/.repo/.repo_fetchtimes.json"
-    RLSLOCAL=$(date -d "$(stat -c %z $RLSPATH)" +"%e %b %Y, %T %Z")
-    RLSUTC=$(date -d "$(stat -c %z $RLSPATH)" -u +"%e %b %Y, %T %Z")
-    echo "Last repo sync: $RLSLOCAL / $RLSUTC"
-}
-
-function reposync() {
-    repo sync -j 4 "$@"
-}
-
-function repodiff() {
-    if [ -z "$*" ]; then
-        echo "Usage: repodiff <ref-from> [[ref-to] [--numstat]]"
-        return
-    fi
-    diffopts=$* repo forall -c \
-      'echo "$REPO_PATH ($REPO_REMOTE)"; git diff ${diffopts} 2>/dev/null ;'
 }
 
 # Return success if adb is up and not in recovery
@@ -771,7 +128,7 @@ function dopush()
         echo "Device Found."
     fi
 
-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD") || [ "$FORCE_PUSH" = "true" ];
+    if (adb shell getprop ro.aosp.device | grep -q "$AOSP_BUILD") || [ "$FORCE_PUSH" = "true" ];
     then
     # retrieve IP and PORT info if we're using a TCP connection
     TCPIPPORT=$(adb devices \
@@ -890,7 +247,7 @@ EOF
     rm -f $OUT/.log
     return 0
     else
-        echo "The connected device does not appear to be $LINEAGE_BUILD, run away!"
+        echo "The connected device does not appear to be $AOSP_BUILD, run away!"
     fi
 }
 
@@ -901,11 +258,6 @@ alias mmmap='dopush mmma'
 alias mkap='dopush mka'
 alias cmkap='dopush cmka'
 
-function repopick() {
-    T=$(gettop)
-    $T/vendor/lineage/build/tools/repopick.py $@
-}
-
 function sort-blobs-list() {
     T=$(gettop)
     $T/tools/extract-utils/sort-blobs-list.py $@
@@ -915,7 +267,7 @@ function fixup_common_out_dir() {
     common_out_dir=$(_get_build_var_cached OUT_DIR)/target/common
     target_device=$(_get_build_var_cached TARGET_DEVICE)
     common_target_out=common-${target_device}
-    if [ ! -z $LINEAGE_FIXUP_COMMON_OUT ]; then
+    if [ ! -z $AOSP_FIXUP_COMMON_OUT ]; then
         if [ -d ${common_out_dir} ] && [ ! -L ${common_out_dir} ]; then
             mv ${common_out_dir} ${common_out_dir}-${target_device}
             ln -s ${common_target_out} ${common_out_dir}
@@ -928,91 +280,4 @@ function fixup_common_out_dir() {
         [ -L ${common_out_dir} ] && rm ${common_out_dir}
         mkdir -p ${common_out_dir}
     fi
-}
-
-function build_kernel() {
-    if [[ "${SKIP_KERNEL_BUILD}" == "true" || "${SKIP_KERNEL_BUILD}" == "1" ]]; then
-        echo "Skipping kernel build"
-        return
-    fi
-    local lineage_version="lineage-$(_get_build_var_cached PRODUCT_VERSION_MAJOR).$(_get_build_var_cached PRODUCT_VERSION_MINOR)"
-
-    local target_kernel_device="$(_get_build_var_cached TARGET_KERNEL_DEVICE)"
-    local target_kernel_dir="${ANDROID_BUILD_TOP}/$(_get_build_var_cached TARGET_KERNEL_DIR)"
-    local target_kernel_source="$(_get_build_var_cached TARGET_KERNEL_PLATFORM_SOURCE)"
-
-    local KERNEL_BUILD_TOP="${ANDROID_BUILD_TOP}/out-kernel/${target_kernel_source}"
-
-    # Make sure we have the kernel source folder structure in place
-    if [ ! -d "${KERNEL_BUILD_TOP}/.repo" ]; then
-        echo "Kernel source ${KERNEL_BUILD_TOP} is missing, preparing folder structure"
-
-        # Copy .repo/repo from Android tree to allow nested `repo init`
-        mkdir -p "${KERNEL_BUILD_TOP}/.repo"
-        cp -R "${ANDROID_BUILD_TOP}/.repo/repo" "${KERNEL_BUILD_TOP}/.repo/repo"
-
-        # Allow custom .repo/project-objects dir
-        if [ -n "${KERNEL_REPO_PROJECT_OBJECTS_DIR}" ]; then
-            if [ ! -d "${KERNEL_REPO_PROJECT_OBJECTS_DIR}" ]; then
-                mkdir "${KERNEL_REPO_PROJECT_OBJECTS_DIR}"
-            fi
-            ln -sf "${KERNEL_REPO_PROJECT_OBJECTS_DIR}" "${KERNEL_BUILD_TOP}/.repo/project-objects"
-        fi
-
-        # Allow custom .repo/projects dir
-        if [ -n "${KERNEL_REPO_PROJECTS_DIR}" ]; then
-            if [ ! -d "${KERNEL_REPO_PROJECTS_DIR}" ]; then
-                mkdir "${KERNEL_REPO_PROJECTS_DIR}"
-            fi
-            ln -sf "${KERNEL_REPO_PROJECTS_DIR}" "${KERNEL_BUILD_TOP}/.repo/projects"
-        fi
-
-        # Mark as out dir to prevent build system from scanning it
-        touch "${KERNEL_BUILD_TOP}/.out-dir"
-    fi
-
-    # Init, sync, remove previous build output & build kernel
-    pushd "${KERNEL_BUILD_TOP}" > /dev/null
-    if [[ "${SKIP_KERNEL_SYNC}" != "true" && "${SKIP_KERNEL_SYNC}" != "1" ]]; then
-        echo "Syncing ${KERNEL_BUILD_TOP}"
-        local target_kernel_manifest=$(echo android_kernel_${target_kernel_source}_manifest | tr / _)
-        local repo_init_args=("-b" "${lineage_version}")
-        if [ -n "${LINEAGE_MIRROR}" ]; then
-            repo_init_args+=("--reference" "${LINEAGE_MIRROR}")
-        fi
-        if [ -n "${REPO_VERSION}" ]; then
-            repo_init_args+=("--repo-rev" "${REPO_VERSION}")
-        fi
-
-        yes | repo init -u https://github.com/LineageOS/${target_kernel_manifest}.git ${repo_init_args[@]} || [ $? -eq 141 ]
-        if [ $? -ne 0 ]; then
-            echo "Kernel source repo init failed"
-            popd > /dev/null
-            return 1
-        fi
-        if ! repo sync --detach --force-sync; then
-            echo "Kernel source repo sync failed"
-            popd > /dev/null
-            return 1
-        fi
-    fi
-    if [ -d "${KERNEL_BUILD_TOP}/out/${target_kernel_device}/dist" ]; then
-        rm -rf "${KERNEL_BUILD_TOP}/out/${target_kernel_device}/dist"
-    fi
-    if ! ./build_"${target_kernel_device}".sh; then
-        popd > /dev/null
-        return 1
-    fi
-    popd > /dev/null
-
-    # Remove previous kernel prebuilts
-    if [ -d "${target_kernel_dir}" ]; then
-        find "${target_kernel_dir}" -maxdepth 1 ! \( -name .gitignore \) -type f -delete
-    fi
-
-    # Copy the new kernel prebuilts
-    mkdir -p "${target_kernel_dir}"
-    cp -a "${KERNEL_BUILD_TOP}/out/${target_kernel_device}/dist/"* "${target_kernel_dir}/"
-    chmod -x "${target_kernel_dir}/"*
-    echo "Kernel build output copied to ${target_kernel_dir}/"
 }
