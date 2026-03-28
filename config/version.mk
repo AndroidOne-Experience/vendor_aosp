@@ -8,12 +8,10 @@ AOSP_VERSION := AndroidOne-$(CURRENT_DEVICE)-OTA-$(shell date -u +%Y%m%d-%H%M)
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.aosp.version=$(AOSP_VERSION) \
     ro.aosp.releasetype=$(AOSP_BUILD_TYPE) \
-    ro.lineage.build.version=16.0
+    ro.aosp.build.version=16
 
 # Updater (only if production build)
 ifeq ($(AOSP_BUILD_TYPE),PRODUCTION-BUILD)
 PRODUCT_PACKAGES += Updater
-PRODUCT_COPY_FILES += \
-    vendor/aosp/prebuilt/common/etc/init/init.lineage-updater.rc:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/init/init.lineage-updater.rc
 PRODUCT_PACKAGE_OVERLAYS += vendor/aosp/overlay/Updater
 endif

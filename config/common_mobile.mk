@@ -7,10 +7,6 @@ PRODUCT_PACKAGES += \
     Backgrounds \
     LatinIME
 
-# Legal
-PRODUCT_PRODUCT_PROPERTIES += \
-    ro.lineagelegal.url=https://lineageos.org/legal
-
 # Media
 PRODUCT_PRODUCT_PROPERTIES += \
     media.recorder.show_manufacturer_and_model=true
