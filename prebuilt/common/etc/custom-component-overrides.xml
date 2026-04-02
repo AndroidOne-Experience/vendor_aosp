@@ -31,6 +31,10 @@
         <component class=".update.SystemUpdateService" enabled="false" />
     </component-override>
 
+    <component-override package="com.google.android.googlequicksearchbox">
+        <component class=".OneSearchAimActivity" enabled="true" />
+    </component-override>
+
     <component-override package="com.google.android.setupwizard">
         <component class=".update.OtaUpdateActivity" enabled="false" />
     </component-override>
