@@ -4,7 +4,6 @@ $(call inherit-product, vendor/aosp/config/common.mk)
 # Apps
 PRODUCT_PACKAGES += \
     AvatarPicker \
-    Backgrounds \
     LatinIME
 
 # Media
