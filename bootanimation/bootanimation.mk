@@ -7,8 +7,8 @@ else
     # Default to WHITE bootanimation
     BOOTANIMATION_VARIANT := white
 
-    # Use BLACK if GEMENI bootanimation is enabled
-    ifeq ($(TARGET_HAS_GEMENI_BOOTANIMATION),true)
+    # Use BLACK if GEMINI bootanimation is enabled
+    ifeq ($(TARGET_HAS_GEMINI_BOOTANIMATION),true)
         BOOTANIMATION_VARIANT := gemini
     endif
 
